@@ -1,0 +1,6 @@
+python-telegram-bot
+anthropic
+feedparser
+schedule
+python-dotenv
+requests
