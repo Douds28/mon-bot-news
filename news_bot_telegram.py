@@ -10,6 +10,7 @@ Commandes Telegram : /alerte (relance l'alerte du jour) · /hebdo (relance l'upd
 """
 
 import os, time, logging, requests, feedparser, schedule
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from urllib.parse import quote_plus
 from zoneinfo import ZoneInfo
@@ -156,25 +157,32 @@ des grands acteurs, régulation, usages concrets notables (y compris immobilier/
 # Récupération + résumé
 # ---------------------------------------------------------------------------
 
+def fetch_feed(url):
+    try:
+        r = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        return feedparser.parse(r.content).entries[:6]
+    except Exception as e:
+        log.error(f"Erreur fetch {url}: {e}")
+        return []
+
+
 def fetch_articles(urls, max_articles):
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(fetch_feed, urls))
     articles, seen = [], set()
-    for url in urls:
-        try:
-            feed = feedparser.parse(url)
-            for entry in feed.entries[:6]:
-                title = entry.get("title", "").strip()
-                key = title.lower()[:80]
-                if not title or key in seen:
-                    continue
-                seen.add(key)
-                articles.append({
-                    "title": title,
-                    "summary": entry.get("summary", "")[:300],
-                    "link": entry.get("link", ""),
-                    "published": entry.get("published", ""),
-                })
-        except Exception as e:
-            log.error(f"Erreur fetch {url}: {e}")
+    for entries in results:
+        for entry in entries:
+            title = entry.get("title", "").strip()
+            key = title.lower()[:80]
+            if not title or key in seen:
+                continue
+            seen.add(key)
+            articles.append({
+                "title": title,
+                "summary": entry.get("summary", "")[:300],
+                "link": entry.get("link", ""),
+                "published": entry.get("published", ""),
+            })
     return articles[:max_articles]
 
 
@@ -216,19 +224,30 @@ def send_message(text):
     try:
         r = requests.post(url, json={**payload, "parse_mode": "Markdown"}, timeout=20)
         if not r.ok:  # Markdown mal formé → on renvoie en texte brut
-            requests.post(url, json=payload, timeout=20)
+            log.warning(f"Envoi Markdown refusé : {r.text[:200]}")
+            r = requests.post(url, json=payload, timeout=20)
+            if not r.ok:
+                log.error(f"Envoi refusé : {r.text[:200]}")
     except Exception as e:
         log.error(f"Erreur envoi: {e}")
+
+
+def build_section(item, period_label):
+    theme, config = item
+    log.info(f"Traitement : {theme}")
+    articles = fetch_articles(config["feeds"], config["max_articles"])
+    return f"*{theme}*\n\n{summarize(theme, config, articles, period_label)}"
 
 
 def run_digest(sections, title, period_label):
     now = datetime.now(TZ).strftime("%d.%m.%Y · %H:%M")
     send_message(f"*{title}*\n_{now}_\n{'─' * 24}")
-    for theme, config in sections.items():
-        log.info(f"Traitement : {theme}")
-        articles = fetch_articles(config["feeds"], config["max_articles"])
-        send_message(f"*{theme}*\n\n{summarize(theme, config, articles, period_label)}")
-        time.sleep(2)
+    # Tous les thèmes sont préparés en parallèle, puis envoyés dans l'ordre
+    with ThreadPoolExecutor(max_workers=len(sections)) as pool:
+        texts = list(pool.map(lambda it: build_section(it, period_label), sections.items()))
+    for text in texts:
+        send_message(text)
+        time.sleep(1)
     log.info(f"{title} envoyé ✓")
 
 
