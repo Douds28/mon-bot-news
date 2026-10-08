@@ -5,6 +5,7 @@ Bot Telegram de veille personnalisée - David Abergel
     Immobilier Genève · Monde (événements majeurs) · Israël / Moyen-Orient
 - Update hebdo : le lundi à 07:15 (heure de Genève)
     Économie Suisse & Europe · Politique France/Israël/US · Géopolitique mondiale · IA
+    + Perspectives : impact dans les années à venir
 
 Commandes Telegram : /alerte (relance l'alerte du jour) · /hebdo (relance l'update hebdo)
 """
@@ -153,6 +154,32 @@ des grands acteurs, régulation, usages concrets notables (y compris immobilier/
 }
 
 
+# ---- PERSPECTIVES (lundi, après l'update hebdo) ---------------------------
+
+OUTLOOK_THEME = "🔮 Perspectives : impact dans les années à venir"
+OUTLOOK_FEEDS = [
+    gnews_en("Israel war cost OR budget OR deficit OR debt OR \"credit rating\"", "7d"),
+    gnews("coût de la guerre Israël OR budget Israël OR notation Israël", "7d", country="FR"),
+    gnews("immobilier Genève OR Suisse prix OR marché OR taux", "7d"),
+    gnews("BNS OR BCE OR Fed taux perspectives", "7d", country="FR"),
+    gnews_en("oil price outlook OR global economy outlook OR IMF forecast", "7d"),
+]
+OUTLOOK_INSTRUCTIONS = """Tu es l'analyste personnel d'un promoteur-investisseur immobilier basé à Genève,
+qui suit aussi de près Israël, la géopolitique et les marchés.
+
+À partir des résumés de la semaine et des articles ci-dessus, choisis les 3 à 5 faits les plus
+structurants (ex. : le coût de la guerre pour Israël, une décision de banque centrale, un choc pétrolier...).
+
+Pour chacun :
+• *Le fait* : résumé en 1 ligne, avec le chiffre clé
+• *Impact à venir* : ton analyse de ce que ça implique sur 1 à 5 ans (dette, impôts, croissance,
+  monnaie, taux, marchés, immobilier...), avec si utile un scénario probable et un scénario de risque
+• *Pour toi* : le lien concret avec l'immobilier genevois, les taux suisses ou ses investissements, s'il y en a un
+
+Tu peux donner ton avis et raisonner au-delà des articles, mais distingue clairement les faits (issus des
+articles) de ton analyse, qui reste une projection et non une certitude. Pas de conseil d'investissement."""
+
+
 # ---------------------------------------------------------------------------
 # Récupération + résumé
 # ---------------------------------------------------------------------------
@@ -239,7 +266,31 @@ def build_section(item, period_label):
     return f"*{theme}*\n\n{summarize(theme, config, articles, period_label)}"
 
 
-def run_digest(sections, title, period_label):
+def outlook_section(week_texts):
+    articles = fetch_articles(OUTLOOK_FEEDS, 25)
+    articles_text = "\n".join(f"- {a['title']} ({a['published'][:16]})\n  {a['summary']}" for a in articles)
+    prompt = f"""Résumés de la semaine :
+{chr(10).join(week_texts)}
+
+Articles complémentaires :
+{articles_text}
+
+{OUTLOOK_INSTRUCTIONS}
+
+Règles de forme :
+- Français, direct, concret
+- Format Markdown Telegram simple : *gras*, _italique_, puces "•"
+- 25 lignes maximum"""
+    try:
+        msg = client.messages.create(model=MODEL, max_tokens=1500, messages=[{"role": "user", "content": prompt}])
+        text = msg.content[0].text
+    except Exception as e:
+        log.error(f"Erreur Claude (perspectives): {e}")
+        text = "_Analyse indisponible (erreur technique)._"
+    return f"*{OUTLOOK_THEME}*\n_Analyse et projections, pas des certitudes._\n\n{text}"
+
+
+def run_digest(sections, title, period_label, with_outlook=False):
     now = datetime.now(TZ).strftime("%d.%m.%Y · %H:%M")
     send_message(f"*{title}*\n_{now}_\n{'─' * 24}")
     # Tous les thèmes sont préparés en parallèle, puis envoyés dans l'ordre
@@ -248,6 +299,9 @@ def run_digest(sections, title, period_label):
     for text in texts:
         send_message(text)
         time.sleep(1)
+    if with_outlook:
+        log.info(f"Traitement : {OUTLOOK_THEME}")
+        send_message(outlook_section(texts))
     log.info(f"{title} envoyé ✓")
 
 
@@ -256,7 +310,7 @@ def daily_alert():
 
 
 def weekly_update():
-    run_digest(WEEKLY, "📅 Update de la semaine", "7 derniers jours")
+    run_digest(WEEKLY, "📅 Update de la semaine", "7 derniers jours", with_outlook=True)
 
 
 # ---------------------------------------------------------------------------
