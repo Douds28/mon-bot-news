@@ -1,6 +1,8 @@
 python-telegram-bot
 anthropic
 feedparser
-schedule
+schedule>=1.2.0
+pytz
 python-dotenv
 requests
+tzdata
